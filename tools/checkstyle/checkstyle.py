@@ -28,6 +28,30 @@ import tempfile
 import xml.dom.minidom
 import gitlint.git as git
 
+def _FindFoldersContaining(root, wanted):
+  """Searches recursively from root to find directories that has a file with
+  the given name.
+
+  Args:
+    root: Root folder to start the search from.
+    wanted: The filename that we are looking for.
+
+  Returns:
+    List of folders that has a file with the given name
+  """
+
+  if os.path.islink(root):
+    return []
+  result = []
+  for fileName in os.listdir(root):
+    filePath = os.path.join(root, fileName)
+    if os.path.isdir(filePath):
+      subResult = _FindFoldersContaining(filePath, wanted)
+      result.extend(subResult)
+    else:
+      if fileName == wanted:
+        result.append(root)
+  return result
 
 MAIN_DIRECTORY = os.path.normpath(os.path.dirname(__file__))
 CHECKSTYLE_JAR = os.path.join(MAIN_DIRECTORY, 'checkstyle.jar')
@@ -36,17 +60,19 @@ FORCED_RULES = ['com.puppycrawl.tools.checkstyle.checks.imports.ImportOrderCheck
                 'com.puppycrawl.tools.checkstyle.checks.imports.UnusedImportsCheck']
 SKIPPED_RULES_FOR_TEST_FILES = ['com.puppycrawl.tools.checkstyle.checks.javadoc.JavadocTypeCheck',
                                 'com.puppycrawl.tools.checkstyle.checks.javadoc.JavadocMethodCheck']
-SUBPATH_FOR_TEST_FILES = ['/tests/', '/test/']
-SUBPATH_FOR_TEST_DATA_FILES = ['src/tests/test-data/']
+SUBPATH_FOR_TEST_FILES = ['/tests/', '/test/', '/androidTest/']
+SUBPATH_FOR_TEST_DATA_FILES = _FindFoldersContaining(os.path.dirname(os.getcwd()),
+                                                     "IGNORE_CHECKSTYLE")
 ERROR_UNCOMMITTED = 'You need to commit all modified files before running Checkstyle\n'
 ERROR_UNTRACKED = 'You have untracked java files that are not being checked:\n'
 
 
-def RunCheckstyleOnFiles(java_files, config_xml=CHECKSTYLE_STYLE):
+def RunCheckstyleOnFiles(java_files, classpath=CHECKSTYLE_JAR, config_xml=CHECKSTYLE_STYLE):
   """Runs Checkstyle checks on a given set of java_files.
 
   Args:
     java_files: A list of files to check.
+    classpath: The colon-delimited list of JARs in the classpath.
     config_xml: Path of the checkstyle XML configuration file.
 
   Returns:
@@ -54,13 +80,14 @@ def RunCheckstyleOnFiles(java_files, config_xml=CHECKSTYLE_STYLE):
   """
   print 'Running Checkstyle on inputted files'
   java_files = map(os.path.abspath, java_files)
-  stdout = _ExecuteCheckstyle(java_files, config_xml)
+  stdout = _ExecuteCheckstyle(java_files, classpath, config_xml)
   (errors, warnings) = _ParseAndFilterOutput(stdout)
   _PrintErrorsAndWarnings(errors, warnings)
   return errors, warnings
 
 
 def RunCheckstyleOnACommit(commit,
+                           classpath=CHECKSTYLE_JAR,
                            config_xml=CHECKSTYLE_STYLE,
                            file_whitelist=None):
   """Runs Checkstyle checks on a given commit.
@@ -71,6 +98,7 @@ def RunCheckstyleOnACommit(commit,
 
   Args:
     commit: A full 40 character SHA-1 of a commit to check.
+    classpath: The colon-delimited list of JARs in the classpath.
     config_xml: Path of the checkstyle XML configuration file.
     file_whitelist: A list of whitelisted file paths that should be checked.
 
@@ -92,7 +120,7 @@ def RunCheckstyleOnACommit(commit,
       commit_modified_files.keys(), commit)
 
   java_files = tmp_file_map.keys()
-  stdout = _ExecuteCheckstyle(java_files, config_xml)
+  stdout = _ExecuteCheckstyle(java_files, classpath, config_xml)
 
   # Remove all the temporary files.
   shutil.rmtree(tmp_dir)
@@ -127,11 +155,12 @@ def _PrintErrorsAndWarnings(errors, warnings):
     print '\n'.join(warnings)
 
 
-def _ExecuteCheckstyle(java_files, config_xml):
+def _ExecuteCheckstyle(java_files, classpath, config_xml):
   """Runs Checkstyle to check give Java files for style errors.
 
   Args:
     java_files: A list of Java files that needs to be checked.
+    classpath: The colon-delimited list of JARs in the classpath.
     config_xml: Path of the checkstyle XML configuration file.
 
   Returns:
@@ -141,8 +170,7 @@ def _ExecuteCheckstyle(java_files, config_xml):
   checkstyle_env = os.environ.copy()
   checkstyle_env['JAVA_CMD'] = 'java'
   try:
-    check = subprocess.Popen(['java', '-cp',
-                              CHECKSTYLE_JAR,
+    check = subprocess.Popen(['java', '-cp', classpath,
                               'com.puppycrawl.tools.checkstyle.Main', '-c',
                               config_xml, '-f', 'xml'] + java_files,
                              stdout=subprocess.PIPE, env=checkstyle_env)
@@ -300,18 +328,25 @@ def main(args=None):
   parser.add_argument('--sha', '-s')
   parser.add_argument('--config_xml', '-c')
   parser.add_argument('--file_whitelist', '-fw', nargs='+')
+  parser.add_argument('--add_classpath', '-p')
   args = parser.parse_args()
 
   config_xml = args.config_xml or CHECKSTYLE_STYLE
+
   if not os.path.exists(config_xml):
     print 'Java checkstyle configuration file is missing'
     sys.exit(1)
 
+  classpath = CHECKSTYLE_JAR
+
+  if args.add_classpath:
+    classpath = args.add_classpath + ':' + classpath
+
   if args.file:
     # Files to check were specified via command line.
-    (errors, warnings) = RunCheckstyleOnFiles(args.file, config_xml)
+    (errors, warnings) = RunCheckstyleOnFiles(args.file, classpath, config_xml)
   else:
-    (errors, warnings) = RunCheckstyleOnACommit(args.sha, config_xml,
+    (errors, warnings) = RunCheckstyleOnACommit(args.sha, classpath, config_xml,
                                                 args.file_whitelist)
 
   if errors or warnings:

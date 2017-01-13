@@ -490,6 +490,7 @@ frameworks/multidex/library/project.properties                                  
 frameworks/multidex/library/src/.readme                                                           extras/android/support/multidex/library/src/.readme
 frameworks/multidex/library/res/.readme                                                           extras/android/support/multidex/library/res/.readme
 ${OUT_DIR}/target/common/obj/PACKAGING/android-support-multidex_intermediates/android-support-multidex.jar              extras/android/support/multidex/library/libs/android-support-multidex.jar
+${OUT_DIR}/target/common/obj/JAVA_LIBRARIES/android-support-multidex_intermediates/classes.jack                         extras/android/support/multidex/library/libs/android-support-multidex.jack
 
 frameworks/multidex/instrumentation/README.txt                                                         extras/android/support/multidex/instrumentation/README.txt
 frameworks/multidex/instrumentation/.project                                                           extras/android/support/multidex/instrumentation/.project
@@ -500,6 +501,7 @@ frameworks/multidex/instrumentation/src/.readme                                 
 frameworks/multidex/instrumentation/res/.readme                                                        extras/android/support/multidex/instrumentation/res/.readme
 ${OUT_DIR}/target/common/obj/PACKAGING/android-support-multidex-instrumentation_intermediates/android-support-multidex-instrumentation.jar      extras/android/support/multidex/instrumentation/libs/android-support-multidex-instrumentation.jar
 ${OUT_DIR}/target/common/obj/PACKAGING/android-support-multidex_intermediates/android-support-multidex.jar                                      extras/android/support/multidex/instrumentation/libs/android-support-multidex.jar
+${OUT_DIR}/target/common/obj/JAVA_LIBRARIES/android-support-multidex_intermediates/classes.jack                                                 extras/android/support/multidex/instrumentation/libs/android-support-multidex.jack
 
 frameworks/support/v7/mediarouter/README.txt                                                       extras/android/support/v7/mediarouter/README.txt
 frameworks/support/v7/mediarouter/.project                                                         extras/android/support/v7/mediarouter/.project
@@ -515,7 +517,7 @@ frameworks/support/samples/Support7Demos                                        
 frameworks/support/v7/palette/README.txt                                                          extras/android/support/v7/palette/README.txt
 frameworks/support/v7/palette/.project                                                            extras/android/support/v7/palette/.project
 frameworks/support/v7/palette/.classpath                                                          extras/android/support/v7/palette/.classpath
-frameworks/support/v7/palette/src/main/AndroidManifest.xml                                        extras/android/support/v7/palette/AndroidManifest.xml
+frameworks/support/v7/palette/AndroidManifest.xml                                                 extras/android/support/v7/palette/AndroidManifest.xml
 frameworks/support/v7/palette/project.properties                                                  extras/android/support/v7/palette/project.properties
 ${OUT_DIR}/target/common/obj/PACKAGING/android-support-v7-palette_intermediates/android-support-v7-palette.jar    extras/android/support/v7/palette/libs/android-support-v7-palette.jar
 
