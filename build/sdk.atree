@@ -50,17 +50,16 @@ bin/etc1tool                            strip platform-tools/etc1tool
 bin/hprof-conv                          strip platform-tools/hprof-conv
 
 
-# API database for tools such as lint
-development/sdk/generated-api-versions.xml    platform-tools/api/api-versions.xml
-
-# API annotations database for lint
-prebuilts/sdk/sdk-annotations/annotations.zip   platform-tools/api/annotations.zip
-
 # systrace
 external/chromium-trace/catapult/                                         platform-tools/systrace/catapult/
 external/chromium-trace/systrace.py                                       platform-tools/systrace/systrace.py
 external/chromium-trace/NOTICE                                            platform-tools/systrace/NOTICE
 external/chromium-trace/UPSTREAM_REVISION                                 platform-tools/systrace/UPSTREAM_REVISION
+
+# Compatibility: moved to platform but also leave them in platform-tools for a little
+# longer until all active Gradle plugins have support for looking in both places
+development/sdk/generated-api-versions.xml    platform-tools/api/api-versions.xml
+prebuilts/sdk/sdk-annotations/annotations.zip   platform-tools/api/annotations.zip
 
 ##############################################################################
 # Build Tools Component
@@ -196,6 +195,12 @@ development/tools/templates/ic_launcher_ldpi.png            platforms/${PLATFORM
 development/tools/templates/ic_launcher_mdpi.png            platforms/${PLATFORM_NAME}/templates/ic_launcher_mdpi.png
 development/tools/templates/ic_launcher_hdpi.png            platforms/${PLATFORM_NAME}/templates/ic_launcher_hdpi.png
 development/tools/templates/ic_launcher_xhdpi.png           platforms/${PLATFORM_NAME}/templates/ic_launcher_xhdpi.png
+
+# API database for tools such as lint
+development/sdk/generated-api-versions.xml  platforms/${PLATFORM_NAME}/data/api-versions.xml
+
+# API annotations database for lint
+prebuilts/sdk/sdk-annotations/annotations.zip platforms/${PLATFORM_NAME}/data/annotations.zip
 
 # Eclipse Editors support
 framework/layoutlib-legacy.jar            platforms/${PLATFORM_NAME}/data/layoutlib.jar
@@ -582,5 +587,4 @@ ${OUT_DIR}/target/common/obj/PACKAGING/android-support-transition_intermediates/
 ##############################################################################
 # Tests Component
 ##############################################################################
-framework/layoutlib-tests.jar tests/libtests/layoutlib-tests.jar
 system/app/EmulatorSmokeTests/EmulatorSmokeTests.apk tests/emulator-test-apps/EmulatorSmokeTests.apk
