@@ -4,13 +4,16 @@ from __future__ import print_function
 
 import argparse
 import collections
-import mmap
 import os
 import re
 import stat
 import struct
 import sys
 
+
+#------------------------------------------------------------------------------
+# Python 2 and 3 Compatibility Layer
+#------------------------------------------------------------------------------
 
 if sys.version_info >= (3, 0):
     from os import makedirs
@@ -38,128 +41,60 @@ else:
 
     FileNotFoundError = OSError
 
-
 try:
     from sys import intern
 except ImportError:
     pass
 
 
-EI_CLASS = 4
-EI_DATA = 5
-
-ELFCLASSNONE = 0
-ELFCLASS32 = 1
-ELFCLASS64 = 2
-
-ELFDATANONE = 0
-ELFDATA2LSB = 1
-ELFDATA2MSB = 2
-
-DT_NEEDED = 1
-DT_RPATH = 15
-DT_RUNPATH = 29
-
-SHN_UNDEF = 0
-
-STB_LOCAL = 0
-STB_GLOBAL = 1
-STB_WEAK = 2
-
+#------------------------------------------------------------------------------
+# ELF Parser
+#------------------------------------------------------------------------------
 
 Elf_Hdr = collections.namedtuple(
         'Elf_Hdr',
-        'ei_class ei_data ei_version ei_osabi e_type e_machine e_version ' +
-        'e_entry e_phoff e_shoff e_flags e_ehsize e_phentsize e_phnum ' +
+        'ei_class ei_data ei_version ei_osabi e_type e_machine e_version '
+        'e_entry e_phoff e_shoff e_flags e_ehsize e_phentsize e_phnum '
         'e_shentsize e_shnum e_shstridx')
 
 
 Elf_Shdr = collections.namedtuple(
         'Elf_Shdr',
-        'sh_name sh_type sh_flags sh_addr sh_offset sh_size sh_link sh_info ' +
+        'sh_name sh_type sh_flags sh_addr sh_offset sh_size sh_link sh_info '
         'sh_addralign sh_entsize')
 
 
 Elf_Dyn = collections.namedtuple('Elf_Dyn', 'd_tag d_val')
 
 
-class Elf_Sym(object):
-    __slots__ = (
-        'st_name', 'st_value', 'st_size', 'st_info', 'st_other', 'st_shndx'
-    )
+class Elf_Sym(collections.namedtuple(
+    'ELF_Sym', 'st_name st_value st_size st_info st_other st_shndx')):
 
-    def __init__(self, st_name, st_value, st_size, st_info, st_other, st_shndx):
-        self.st_name = st_name
-        self.st_value = st_value
-        self.st_size = st_size
-        self.st_info = st_info
-        self.st_other = st_other
-        self.st_shndx = st_shndx
+    STB_LOCAL = 0
+    STB_GLOBAL = 1
+    STB_WEAK = 2
 
-    def __str__(self):
-        return ('Elf_Sym(' +
-                'st_name=' + repr(self.st_name) + ', '
-                'st_value=' + repr(self.st_value) + ', '
-                'st_size=' + repr(self.st_size) + ', '
-                'st_info=' + repr(self.st_info) + ', '
-                'st_other=' + repr(self.st_other) + ', '
-                'st_shndx=' + repr(self.st_shndx) + ')')
-
-    @staticmethod
-    def _make(p):
-        return Elf_Sym(*p)
+    SHN_UNDEF = 0
 
     @property
     def st_bind(self):
         return (self.st_info >> 4)
 
+    @property
+    def is_local(self):
+        return self.st_bind == Elf_Sym.STB_LOCAL
 
-def _get_elf_class_name(ei_class):
-    if ei_class == ELFCLASS32:
-        return '32'
-    if ei_class == ELFCLASS64:
-        return '64'
-    return 'None'
+    @property
+    def is_global(self):
+        return self.st_bind == Elf_Sym.STB_GLOBAL
 
+    @property
+    def is_weak(self):
+        return self.st_bind == Elf_Sym.STB_WEAK
 
-def _get_elf_data_name(ei_data):
-    if ei_data == ELFDATA2LSB:
-        return 'Little-Endian'
-    if ei_data == ELFDATA2MSB:
-        return 'Big-Endian'
-    return 'None'
-
-
-_ELF_MACHINE_ID_TABLE = {
-    0: 'EM_NONE',
-    3: 'EM_386',
-    8: 'EM_MIPS',
-    40: 'EM_ARM',
-    62: 'EM_X86_64',
-    183: 'EM_AARCH64',
-}
-
-
-def _get_elf_machine_name(e_machine):
-    return _ELF_MACHINE_ID_TABLE.get(e_machine, str(e_machine))
-
-
-def _extract_zero_end_slice(buf, offset):
-    end = offset
-    try:
-        while buf[end] != 0:
-            end += 1
-    except IndexError:
-        pass
-    return buf[offset:end]
-
-
-if sys.version_info >= (3, 0):
-    def _extract_zero_end_str(buf, offset):
-        return intern(_extract_zero_end_slice(buf, offset).decode('utf-8'))
-else:
-    def _extract_zero_end_str(buf, offset):
-        return intern(_extract_zero_end_slice(buf, offset))
+    @property
+    def is_undef(self):
+        return self.st_shndx == Elf_Sym.SHN_UNDEF
 
 
 class ELFError(ValueError):
@@ -167,6 +102,44 @@ class ELFError(ValueError):
 
 
 class ELF(object):
+    # ELF file format constants.
+    ELF_MAGIC = b'\x7fELF'
+
+    EI_CLASS = 4
+    EI_DATA = 5
+
+    ELFCLASSNONE = 0
+    ELFCLASS32 = 1
+    ELFCLASS64 = 2
+
+    ELFDATANONE = 0
+    ELFDATA2LSB = 1
+    ELFDATA2MSB = 2
+
+    DT_NEEDED = 1
+    DT_RPATH = 15
+    DT_RUNPATH = 29
+
+    _ELF_CLASS_NAMES = {
+        ELFCLASS32: '32',
+        ELFCLASS64: '64',
+    }
+
+    _ELF_DATA_NAMES = {
+        ELFDATA2LSB: 'Little-Endian',
+        ELFDATA2MSB: 'Big-Endian',
+    }
+
+    _ELF_MACHINE_IDS = {
+        0: 'EM_NONE',
+        3: 'EM_386',
+        8: 'EM_MIPS',
+        40: 'EM_ARM',
+        62: 'EM_X86_64',
+        183: 'EM_AARCH64',
+    }
+
+
     def __init__(self, ei_class=ELFCLASSNONE, ei_data=ELFDATANONE, e_machine=0,
                  dt_rpath=None, dt_runpath=None, dt_needed=None,
                  exported_symbols=None):
@@ -188,12 +161,33 @@ class ELF(object):
                 'dt_runpath=' + repr(self.dt_runpath) + ', ' +
                 'dt_needed=' + repr(self.dt_needed) + ')')
 
+    @property
+    def elf_class_name(self):
+        return self._ELF_CLASS_NAMES.get(self.ei_class, 'None')
+
+    @property
+    def elf_data_name(self):
+        return self._ELF_DATA_NAMES.get(self.ei_data, 'None')
+
+    @property
+    def elf_machine_name(self):
+        return self._ELF_MACHINE_IDS.get(self.e_machine, str(self.e_machine))
+
+    @property
+    def is_32bit(self):
+        return self.ei_class == ELF.ELFCLASS32
+
+    @property
+    def is_64bit(self):
+        return self.ei_class == ELF.ELFCLASS64
+
     def dump(self, file=None):
+        """Print parsed ELF information to the file"""
         file = file if file is not None else sys.stdout
 
-        print('EI_CLASS\t' + _get_elf_class_name(self.ei_class), file=file)
-        print('EI_DATA\t\t' + _get_elf_data_name(self.ei_data), file=file)
-        print('E_MACHINE\t' + _get_elf_machine_name(self.e_machine), file=file)
+        print('EI_CLASS\t' + self.elf_class_name, file=file)
+        print('EI_DATA\t\t' + self.elf_data_name, file=file)
+        print('E_MACHINE\t' + self.elf_machine_name, file=file)
         if self.dt_rpath:
             print('DT_RPATH\t' + self.dt_rpath, file=file)
         if self.dt_runpath:
@@ -204,31 +198,55 @@ class ELF(object):
             print('SYMBOL\t\t' + symbol, file=file)
 
     def dump_exported_symbols(self, file=None):
+        """Print exported symbols to the file"""
         file = file if file is not None else sys.stdout
-
         for symbol in self.exported_symbols:
             print(symbol, file=file)
 
+    # Extract zero-terminated buffer slice.
+    def _extract_zero_terminated_buf_slice(self, buf, offset):
+        """Extract a zero-terminated buffer slice from the given offset"""
+        end = offset
+        try:
+            while buf[end] != 0:
+                end += 1
+        except IndexError:
+            pass
+        return buf[offset:end]
+
+    # Extract c-style interned string from the buffer.
+    if sys.version_info >= (3, 0):
+        def _extract_zero_terminated_str(self, buf, offset):
+            """Extract a c-style string from the given buffer and offset"""
+            buf_slice = self._extract_zero_terminated_buf_slice(buf, offset)
+            return intern(buf_slice.decode('utf-8'))
+    else:
+        def _extract_zero_terminated_str(self, buf, offset):
+            """Extract a c-style string from the given buffer and offset"""
+            return intern(self._extract_zero_terminated_buf_slice(buf, offset))
+
     def _parse_from_buf_internal(self, buf):
+        """Parse ELF image resides in the buffer"""
+
         # Check ELF ident.
         if buf.size() < 8:
             raise ELFError('bad ident')
 
-        if buf[0:4] != b'\x7fELF':
+        if buf[0:4] != ELF.ELF_MAGIC:
             raise ELFError('bad magic')
 
-        self.ei_class = buf[EI_CLASS]
-        if self.ei_class != ELFCLASS32 and self.ei_class != ELFCLASS64:
+        self.ei_class = buf[ELF.EI_CLASS]
+        if self.ei_class not in (ELF.ELFCLASS32, ELF.ELFCLASS64):
             raise ELFError('unknown word size')
 
-        self.ei_data = buf[EI_DATA]
-        if self.ei_data != ELFDATA2LSB and self.ei_data != ELFDATA2MSB:
+        self.ei_data = buf[ELF.EI_DATA]
+        if self.ei_data not in (ELF.ELFDATA2LSB, ELF.ELFDATA2MSB):
             raise ELFError('unknown endianness')
 
         # ELF structure definitions.
-        endian_fmt = '<' if self.ei_data == ELFDATA2LSB else '>'
+        endian_fmt = '<' if self.ei_data == ELF.ELFDATA2LSB else '>'
 
-        if self.ei_class == ELFCLASS32:
+        if self.is_32bit:
             elf_hdr_fmt = endian_fmt + '4x4B8xHHLLLLLHHHHHH'
             elf_shdr_fmt = endian_fmt + 'LLLLLLLLLL'
             elf_dyn_fmt = endian_fmt + 'lL'
@@ -256,7 +274,7 @@ class ELF(object):
             return parse_struct(Elf_Dyn, elf_dyn_fmt, offset,
                                 'bad .dynamic entry')
 
-        if self.ei_class == ELFCLASS32:
+        if self.is_32bit:
             def parse_elf_sym(offset):
                 return parse_struct(Elf_Sym, elf_sym_fmt, offset, 'bad elf sym')
         else:
@@ -268,7 +286,7 @@ class ELF(object):
                     raise ELFError('bad elf sym')
 
         def extract_str(offset):
-            return _extract_zero_end_str(buf, offset)
+            return self._extract_zero_terminated_str(buf, offset)
 
         # Parse ELF header.
         header = parse_elf_hdr(0)
@@ -309,11 +327,11 @@ class ELF(object):
         dynamic_end = dynamic_off + dynamic_shdr.sh_size
         for ent_off in range(dynamic_off, dynamic_end, dynamic_shdr.sh_entsize):
             ent = parse_elf_dyn(ent_off)
-            if ent.d_tag == DT_NEEDED:
+            if ent.d_tag == ELF.DT_NEEDED:
                 self.dt_needed.append(extract_str(dynstr_off + ent.d_val))
-            elif ent.d_tag == DT_RPATH:
+            elif ent.d_tag == ELF.DT_RPATH:
                 self.dt_rpath = extract_str(dynstr_off + ent.d_val)
-            elif ent.d_tag == DT_RUNPATH:
+            elif ent.d_tag == ELF.DT_RUNPATH:
                 self.dt_runpath = extract_str(dynstr_off + ent.d_val)
 
         # Parse exported symbols in .dynsym section.
@@ -325,19 +343,21 @@ class ELF(object):
             dynsym_entsize = dynsym_shdr.sh_entsize
             for ent_off in range(dynsym_off, dynsym_end, dynsym_entsize):
                 ent = parse_elf_sym(ent_off)
-                if ent.st_bind != STB_LOCAL and ent.st_shndx != SHN_UNDEF:
+                if not ent.is_local and not ent.is_undef:
                     exported_symbols.append(
                             extract_str(dynstr_off + ent.st_name))
             exported_symbols.sort()
             self.exported_symbols = exported_symbols
 
     def _parse_from_buf(self, buf):
+        """Parse ELF image resides in the buffer"""
         try:
             self._parse_from_buf_internal(buf)
         except IndexError:
             raise ELFError('bad offset')
 
     def _parse_from_file(self, path):
+        """Parse ELF image from the file path"""
         with open(path, 'rb') as f:
             st = os.fstat(f.fileno())
             if not st.st_size:
@@ -347,21 +367,22 @@ class ELF(object):
 
     @staticmethod
     def load(path):
+        """Create an ELF instance from the file path"""
         elf = ELF()
         elf._parse_from_file(path)
         return elf
 
     @staticmethod
     def loads(buf):
+        """Create an ELF instance from the buffer"""
         elf = ELF()
         elf._parse_from_buf(buf)
         return elf
 
 
-PT_SYSTEM = 0
-PT_VENDOR = 1
-NUM_PARTITIONS = 2
-
+#------------------------------------------------------------------------------
+# NDK and Banned Libraries
+#------------------------------------------------------------------------------
 
 NDK_LOW_LEVEL = {
     'libc.so', 'libstdc++.so', 'libdl.so', 'liblog.so', 'libm.so', 'libz.so',
@@ -379,10 +400,33 @@ def _is_ndk_lib(path):
     return lib_name in NDK_LOW_LEVEL or lib_name in NDK_HIGH_LEVEL
 
 
-BANNED_LIBS = {
-    'libbinder.so',
-}
+BannedLib = collections.namedtuple(
+        'BannedLib', ('name', 'reason', 'action',))
 
+BA_WARN  = 0
+BA_EXCLUDE = 1
+
+class BannedLibDict(object):
+    def __init__(self):
+        self.banned_libs = dict()
+
+    def add(self, name, reason, action):
+        self.banned_libs[name] = BannedLib(name, reason, action)
+
+    def get(self, name):
+        return self.banned_libs.get(name, None)
+
+    @staticmethod
+    def create_default():
+        d = BannedLibDict()
+        d.add('libbinder.so', 'un-versioned IPC', BA_WARN)
+        d.add('libselinux.so', 'policydb might be incompatible', BA_WARN)
+        return d
+
+
+#------------------------------------------------------------------------------
+# ELF Linker
+#------------------------------------------------------------------------------
 
 def is_accessible(path):
     try:
@@ -398,6 +442,11 @@ def scan_executables(root):
             path = os.path.join(base, filename)
             if is_accessible(path):
                 yield path
+
+
+PT_SYSTEM = 0
+PT_VENDOR = 1
+NUM_PARTITIONS = 2
 
 
 class GraphNode(object):
@@ -428,7 +477,7 @@ class Graph(object):
 
     def add(self, partition, path, elf):
         node = GraphNode(partition, path, elf)
-        if elf.ei_class == ELFCLASS32:
+        if elf.is_32bit:
             self.lib32[path] = node
         else:
             self.lib64[path] = node
@@ -441,10 +490,27 @@ class Graph(object):
             if src and dst:
                 src.add_dep(dst)
 
+    def map_path_to_lib(self, path):
+        for lib_set in (self.lib32, self.lib64):
+            lib = lib_set.get(path)
+            if lib:
+                return lib
+        return None
+
+    def map_paths_to_libs(self, paths, report_error):
+        result = set()
+        for path in paths:
+            lib = self.map_path_to_lib(path)
+            if not lib:
+                report_error(path)
+                continue
+            result.add(lib)
+        return result
+
     @staticmethod
     def _compile_path_matcher(root, subdirs):
         dirs = [os.path.normpath(os.path.join(root, i)) for i in subdirs]
-        patts = ['(?:' + re.escape(i) + ')' for i in dirs]
+        patts = ['(?:' + re.escape(i) + os.sep + ')' for i in dirs]
         return re.compile('|'.join(patts))
 
     def add_executables_in_dir(self, partition_name, partition, root,
@@ -499,7 +565,7 @@ class Graph(object):
         self._resolve_deps_lib_set(self.lib64, '/system/lib64',
                                    '/vendor/lib64')
 
-    def compute_vndk_libs(self, generic_refs):
+    def compute_vndk_libs(self, generic_refs, banned_libs):
         vndk_core = set()
         vndk_ext = set()
 
@@ -518,29 +584,26 @@ class Graph(object):
         collect_lib_with_partition_user(
                 vndk_ext, self.lib_pt[PT_VENDOR], PT_SYSTEM)
 
-        # Remove NDK libraries.
+        # Remove NDK libraries and banned libraries.
+        def is_not_vndk(lib):
+            return lib.is_ndk or banned_libs.get(os.path.basename(lib.path))
+
         def remove_ndk_libs(libs):
-            return set(lib for lib in libs if not lib.is_ndk)
+            return set(lib for lib in libs if not is_not_vndk(lib))
 
         vndk_core = remove_ndk_libs(vndk_core)
         vndk_ext = remove_ndk_libs(vndk_ext)
 
         # Compute transitive closure.
-        def get_transitive_closure(root, boundary):
-            closure = set(root)
-            stack = list(root)
-            while stack:
-                lib = stack.pop()
-                for dep in lib.deps:
-                    if dep.is_ndk:
-                        continue
-                    if dep not in closure and dep not in boundary:
-                        closure.add(dep)
-                        stack.append(dep)
-            return closure
+        def is_not_vndk_indirect(lib):
+            return is_not_vndk(lib) or lib in vndk_ext
 
-        vndk_indirect = get_transitive_closure(vndk_core, vndk_ext) - vndk_core
-        vndk_ext = get_transitive_closure(vndk_ext, vndk_core)
+        def is_not_vndk_ext(lib):
+            return is_not_vndk(lib) or lib in vndk_core
+
+        vndk_indirect = self.compute_closure(vndk_core, is_not_vndk_indirect)
+        vndk_indirect -= vndk_core
+        vndk_ext = self.compute_closure(vndk_ext, is_not_vndk_ext)
 
         # Move extended libraries from vndk_core to vndk_ext.
         if generic_refs:
@@ -561,8 +624,8 @@ class Graph(object):
                 # Move the library from vndk_core to vndk_ext.
                 vndk_ext.add(lib)
                 for dep in lib.deps:
-                    # Skip all NDK dependencies. They are not VNDK.
-                    if dep.is_ndk:
+                    # Skip NDK or banned libraries.
+                    if is_not_vndk(dep):
                         continue
                     # Skip vndk_ext and possibly vndk_core.
                     if dep in vndk_ext or dep in stacked:
@@ -574,6 +637,20 @@ class Graph(object):
                     stacked.add(dep)
 
         return (vndk_core, vndk_indirect, vndk_ext)
+
+    @staticmethod
+    def compute_closure(root_set, is_excluded):
+        closure = set(root_set)
+        stack = list(root_set)
+        while stack:
+            lib = stack.pop()
+            for dep in lib.deps:
+                if is_excluded(dep):
+                    continue
+                if dep not in closure:
+                    closure.add(dep)
+                    stack.append(dep)
+        return closure
 
     @staticmethod
     def create(system_dirs=None, system_dirs_as_vendor=None, vendor_dirs=None,
@@ -598,6 +675,10 @@ class Graph(object):
 
         return graph
 
+
+#------------------------------------------------------------------------------
+# Generic Reference
+#------------------------------------------------------------------------------
 
 class GenericRefs(object):
     def __init__(self):
@@ -624,6 +705,10 @@ class GenericRefs(object):
     def is_equivalent_lib(self, lib):
         return self.refs.get(lib.path) == lib.elf.exported_symbols
 
+
+#------------------------------------------------------------------------------
+# Commands
+#------------------------------------------------------------------------------
 
 class Command(object):
     def __init__(self, name, help):
@@ -766,10 +851,12 @@ class VNDKCommand(ELFGraphCommand):
     def _warn_banned_vendor_lib_deps(self, graph, banned_libs):
         for lib in graph.lib_pt[PT_VENDOR].values():
             for dep in lib.deps:
-                dep_name = os.path.basename(dep.path)
-                if dep_name in banned_libs:
-                    print('warning: {}: Vendor binary depends on banned {}.'
-                            .format(lib.path, dep.path), file=sys.stderr)
+                banned = banned_libs.get(os.path.basename(dep.path))
+                if banned:
+                    print('warning: {}: Vendor binary depends on banned {} '
+                          '(reason: {})'.format(
+                              lib.path, dep.path, banned.reason),
+                          file=sys.stderr)
 
     def _check_ndk_extensions(self, graph, generic_refs):
         for lib_set in (graph.lib32, graph.lib64):
@@ -779,29 +866,35 @@ class VNDKCommand(ELFGraphCommand):
                             .format(lib.path), file=sys.stderr)
 
     def main(self, args):
+        # Link ELF objects.
         graph = Graph.create(args.system, args.system_dir_as_vendor,
                              args.vendor, args.vendor_dir_as_system,
                              args.load_extra_deps)
 
+        # Load the generic reference.
         generic_refs = None
         if args.load_generic_refs:
             generic_refs = GenericRefs.create_from_dir(args.load_generic_refs)
             self._check_ndk_extensions(graph, generic_refs)
 
+        # Create banned libraries.
+        if not args.ban_vendor_lib_dep:
+            banned_libs = BannedLibDict.create_default()
+        else:
+            banned_libs = BannedLibDict()
+            for name in args.ban_vendor_lib_dep:
+                banned_libs.add(name, 'user-banned', BA_WARN)
+
         if args.warn_incorrect_partition:
             self._warn_incorrect_partition(graph)
 
         vndk_core, vndk_indirect, vndk_ext = \
-                graph.compute_vndk_libs(generic_refs)
+                graph.compute_vndk_libs(generic_refs, banned_libs)
 
         if args.warn_high_level_ndk_deps:
             self._warn_high_level_ndk_deps((vndk_core, vndk_indirect, vndk_ext))
 
         if args.warn_banned_vendor_lib_deps:
-            if args.ban_vendor_lib_dep:
-                banned_libs = set(args.ban_vendor_lib_dep)
-            else:
-                banned_libs = BANNED_LIBS
             self._warn_banned_vendor_lib_deps(graph, banned_libs)
 
         for lib in sorted_lib_path_list(vndk_core):
@@ -853,6 +946,103 @@ class DepsCommand(ELFGraphCommand):
                     print('\t' + dep)
         return 0
 
+
+class DepsClosureCommand(ELFGraphCommand):
+    def __init__(self):
+        super(DepsClosureCommand, self).__init__(
+                'deps-closure', help='Find transitive closure of dependencies')
+
+    def add_argparser_options(self, parser):
+        super(DepsClosureCommand, self).add_argparser_options(parser)
+
+        parser.add_argument('lib', nargs='+',
+                            help='root set of the shared libraries')
+
+        parser.add_argument('--exclude-lib', action='append', default=[],
+                            help='libraries to be excluded')
+
+        parser.add_argument('--exclude-ndk', action='store_true',
+                            help='exclude ndk libraries')
+
+    def main(self, args):
+        graph = Graph.create(args.system, args.system_dir_as_vendor,
+                             args.vendor, args.vendor_dir_as_system,
+                             args.load_extra_deps)
+
+        # Find root/excluded libraries by their paths.
+        def report_error(path):
+            print('error: no such lib: {}'.format(path), file=sys.stderr)
+        root_libs = graph.map_paths_to_libs(args.lib, report_error)
+        excluded_libs = graph.map_paths_to_libs(args.exclude_lib, report_error)
+
+        # Compute and print the closure.
+        if args.exclude_ndk:
+            def is_excluded_libs(lib):
+                return lib.is_ndk or lib in excluded_libs
+        else:
+            def is_excluded_libs(lib):
+                return lib in excluded_libs
+
+        closure = graph.compute_closure(root_libs, is_excluded_libs)
+        for lib in sorted_lib_path_list(closure):
+            print(lib)
+        return 0
+
+
+class SpHalCommand(ELFGraphCommand):
+    def __init__(self):
+        super(SpHalCommand, self).__init__(
+                'sp-hal', help='Find transitive closure of same-process HALs')
+
+    def add_argparser_options(self, parser):
+        super(SpHalCommand, self).add_argparser_options(parser)
+
+        parser.add_argument('--closure', action='store_true',
+                            help='show the closure')
+
+    def main(self, args):
+        graph = Graph.create(args.system, args.system_dir_as_vendor,
+                             args.vendor, args.vendor_dir_as_system,
+                             args.load_extra_deps)
+
+        # Find SP HALs.
+        name_patterns = (
+            # OpenGL-related
+            '^/vendor/.*/libEGL_.*\\.so$',
+            '^/vendor/.*/libGLESv1_CM_.*\\.so$',
+            '^/vendor/.*/libGLESv2_.*\\.so$',
+            '^/vendor/.*/libGLESv3_.*\\.so$',
+            # Vulkan
+            '^/vendor/.*/vulkan.*\\.so$',
+            # libRSDriver
+            '^/vendor/.*/libRSDriver.*\\.so$',
+            '^/vendor/.*/libPVRRS\\.so$',
+            # Gralloc mapper
+            '^.*/gralloc\\..*\\.so$',
+            '^.*/android\\.hardware\\.graphics\\.mapper@\\d+\\.\\d+-impl\\.so$',
+        )
+
+        patt = re.compile('|'.join('(?:' + p + ')' for p in name_patterns))
+
+        # Find root/excluded libraries by their paths.
+        sp_hals = set()
+        for lib_set in graph.lib_pt:
+            for lib in lib_set.values():
+                if patt.match(lib.path):
+                    sp_hals.add(lib)
+
+        # Compute the closure (if specified).
+        if args.closure:
+            def is_excluded_libs(lib):
+                return lib.is_ndk
+            sp_hals = graph.compute_closure(sp_hals, is_excluded_libs)
+
+        # Print the result.
+        for lib in sorted_lib_path_list(sp_hals):
+            print(lib)
+        return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='subcmd')
@@ -867,6 +1057,8 @@ def main():
     register_subcmd(CreateGenericRefCommand())
     register_subcmd(VNDKCommand())
     register_subcmd(DepsCommand())
+    register_subcmd(DepsClosureCommand())
+    register_subcmd(SpHalCommand())
 
     args = parser.parse_args()
     if not args.subcmd:
