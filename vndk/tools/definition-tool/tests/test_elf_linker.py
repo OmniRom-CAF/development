@@ -9,8 +9,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import unittest
 
 from compat import StringIO
-from vndk_definition_tool import (BannedLibDict, ELF, ELFLinker, PT_SYSTEM,
-                                  PT_VENDOR)
+from vndk_definition_tool import (BannedLibDict, ELF, ELFLinker, GenericRefs,
+                                  PT_SYSTEM, PT_VENDOR)
 
 
 class GraphBuilder(object):
@@ -237,63 +237,75 @@ class ELFLinkerTest(unittest.TestCase):
         node = graph.get_lib('/vendor/lib64/libEGL.so')
         self.assertEqual([], self._get_paths_from_nodes(node.users))
 
-    def test_compute_vndk_stable(self):
+    def test_compute_predefined_vndk_stable(self):
+        lib_names = (
+            # SP-HAL VNDK-stable
+            'libhidlmemory',
+
+            # HIDL interfaces.
+            'android.hardware.graphics.allocator@2.0',
+            'android.hardware.graphics.common@1.0',
+            'android.hardware.graphics.mapper@2.0',
+            'android.hidl.base@1.0',
+
+            # SP-NDK VNDK-stable (HIDL related)
+            'libhidl-gen-utils',
+            'libhidlbase',
+            'libhidltransport',
+            'libhwbinder',
+
+            # SP-NDK VNDK-stable (HIDL related)
+            'libcutils',
+            'liblzma',
+
+            # SP-NDK VNDK-stable (should be removed)
+            'libbacktrace',
+            'libbase',
+            'libc++',
+            'libunwind',
+            'libziparchive',
+
+            # Bad VNDK-stable (must be removed)
+            'libhardware',
+            'libnativeloader',
+            'libvintf',
+
+            # SP-NDK VNDK-stable (UI-related)
+            'libnativewindow',
+            'libsync',
+
+            # SP-NDK dependencies (SP-NDK only)
+            'libui',
+            'libutils',
+        )
+
+        # Add VNDK-stable libraries.
         gb = GraphBuilder()
+        for name in lib_names:
+            gb.add_multilib(PT_SYSTEM, name, extra_dir='vndk-stable')
 
-        # HIDL libraries.
-        gb.add_multilib(PT_SYSTEM, 'libhidlbase', extra_dir='vndk-stable')
-        gb.add_multilib(PT_SYSTEM, 'libhidltransport', extra_dir='vndk-stable')
-        gb.add_multilib(PT_SYSTEM, 'libhidlmemory', extra_dir='vndk-stable')
-        gb.add_multilib(PT_SYSTEM, 'libfmp', extra_dir='vndk-stable')
-        gb.add_multilib(PT_SYSTEM, 'libhwbinder', extra_dir='vndk-stable')
-
-        # UI libraries.
-        # TODO: Add libui.so here.
+        # Add some unrelated libraries.
+        gb.add_multilib(PT_SYSTEM, 'libfoo')
+        gb.add_multilib(PT_SYSTEM, 'libbar', extra_dir='vndk-stable')
 
         gb.resolve()
 
-        # Compute VNDK-stable.
+        # Compute VNDK-stable and check the result.
         vndk_stable = set(
-                lib.path for lib in gb.graph.compute_vndk_stable(False))
+                lib.path for lib in gb.graph.compute_predefined_vndk_stable())
 
-        for lib in ('lib', 'lib64'):
-            # Check HIDL libraries.
-            self.assertIn('/system/' + lib + '/vndk-stable/libhidlbase.so',
-                          vndk_stable)
-            self.assertIn('/system/' + lib + '/vndk-stable/libhidltransport.so',
-                          vndk_stable)
-            self.assertIn('/system/' + lib + '/vndk-stable/libhidlmemory.so',
-                          vndk_stable)
-            self.assertIn('/system/' + lib + '/vndk-stable/libfmp.so',
-                          vndk_stable)
-            self.assertIn('/system/' + lib + '/vndk-stable/libhwbinder.so',
-                          vndk_stable)
+        for lib_dir_name in ('lib', 'lib64'):
+            lib_dir = '/system/' + lib_dir_name + '/vndk-stable'
+            for name in lib_names:
+                self.assertIn(os.path.join(lib_dir, name + '.so'), vndk_stable)
 
-            # TODO: Check libui.so here.
+        self.assertNotIn('/system/lib/libfoo.so', vndk_stable)
+        self.assertNotIn('/system/lib64/libfoo.so', vndk_stable)
 
-    def test_compute_vndk_stable_closure(self):
-        gb = GraphBuilder()
+        self.assertNotIn('/system/lib/vndk-stable/libbar.so', vndk_stable)
+        self.assertNotIn('/system/lib64/vndk-stable/libbar.so', vndk_stable)
 
-        libc = gb.add_lib(PT_SYSTEM, ELF.ELFCLASS64, 'libc')
-
-        libhidlbase = gb.add_lib(PT_SYSTEM, ELF.ELFCLASS64, 'libhidlbase',
-                                 dt_needed=['libfoo.so'],
-                                 extra_dir='vndk-stable')
-
-        libfoo = gb.add_lib(PT_SYSTEM, ELF.ELFCLASS64, 'libfoo')
-
-        gb.resolve()
-
-        # Compute VNDK-stable.
-        vndk_stable = gb.graph.compute_vndk_stable(False)
-        vndk_stable_closure = gb.graph.compute_vndk_stable(True)
-
-        self.assertSetEqual({libhidlbase}, vndk_stable)
-        self.assertSetEqual({libhidlbase, libfoo}, vndk_stable_closure)
-        self.assertNotIn(libc, vndk_stable)
-        self.assertNotIn(libc, vndk_stable_closure)
-
-    def test_compute_sp_hal(self):
+    def test_compute_predefined_sp_hal(self):
         gb = GraphBuilder()
 
         # HIDL SP-HAL implementation.
@@ -311,6 +323,7 @@ class ELFLinkerTest(unittest.TestCase):
 
         # OpenGL implementation.
         gb.add_multilib(PT_VENDOR, 'libEGL_chipset', extra_dir='egl')
+        gb.add_multilib(PT_VENDOR, 'libGLES_chipset', extra_dir='egl')
         gb.add_multilib(PT_VENDOR, 'libGLESv1_CM_chipset', extra_dir='egl')
         gb.add_multilib(PT_VENDOR, 'libGLESv2_chipset', extra_dir='egl')
         gb.add_multilib(PT_VENDOR, 'libGLESv3_chipset', extra_dir='egl')
@@ -329,7 +342,7 @@ class ELFLinkerTest(unittest.TestCase):
         gb.resolve()
 
         # Compute SP-HAL.
-        sp_hals = set(lib.path for lib in gb.graph.compute_sp_hal(set(), False))
+        sp_hals = set(lib.path for lib in gb.graph.compute_predefined_sp_hal())
 
         for lib in ('lib', 'lib64'):
             # Check HIDL SP-HAL implementation.
@@ -349,6 +362,8 @@ class ELFLinkerTest(unittest.TestCase):
 
             # Check that OpenGL implementations are SP-HALs.
             self.assertIn('/vendor/' + lib + '/egl/libEGL_chipset.so', sp_hals)
+            self.assertIn('/vendor/' + lib + '/egl/libGLES_chipset.so',
+                          sp_hals)
             self.assertIn('/vendor/' + lib + '/egl/libGLESv1_CM_chipset.so',
                           sp_hals)
             self.assertIn('/vendor/' + lib + '/egl/libGLESv2_chipset.so',
@@ -367,38 +382,115 @@ class ELFLinkerTest(unittest.TestCase):
             self.assertNotIn('/system/' + lib + '/libfoo.so', sp_hals)
             self.assertNotIn('/vendor/' + lib + '/libfoo.so', sp_hals)
 
-    def test_compute_sp_hal_closure(self):
+    def test_compute_sp_lib(self):
+        # Create graph.
         gb = GraphBuilder()
 
-        libc = gb.add_lib(PT_SYSTEM, ELF.ELFCLASS64, 'libc')
+        # LL-NDK (should be excluded from result)
+        gb.add_multilib(PT_SYSTEM, 'libc')
 
-        libhidlbase = gb.add_lib(PT_SYSTEM, ELF.ELFCLASS64, 'libhidlbase')
+        # SP-Both VNDK-stable
+        gb.add_multilib(PT_SYSTEM, 'libsp_both_vs')
 
-        libhidltransport = gb.add_lib(PT_SYSTEM, ELF.ELFCLASS64,
-                                      'libhidltransport')
+        # SP-NDK VNDK-stable
+        gb.add_multilib(PT_SYSTEM, 'libcutils_dep', dt_needed=['libc.so'])
+        gb.add_multilib(PT_SYSTEM, 'libcutils',
+                        dt_needed=['libc.so', 'libcutils_dep.so',
+                                   'libsp_both_vs.so'])
 
-        gralloc_mapper = gb.add_lib(
-                PT_VENDOR, ELF.ELFCLASS64,
-                name='android.hardware.graphics.mapper@2.0-impl',
-                dt_needed=['libhidlbase.so', 'libhidltransport.so',
-                           'libc.so', 'gralloc_vnd.so'],
-                extra_dir='sameprocess')
+        # SP-NDK dependencies
+        gb.add_multilib(PT_SYSTEM, 'libutils',
+                        dt_needed=['libc.so', 'libcutils.so'])
 
-        gralloc_vnd = gb.add_lib(PT_VENDOR, ELF.ELFCLASS64, 'gralloc_vnd')
+        # SP-NDK
+        gb.add_multilib(PT_SYSTEM, 'libEGL',
+                        dt_needed=['libc.so', 'libutils.so'])
+
+        # SP-HAL dependencies
+        gb.add_multilib(PT_VENDOR, 'libllvm_vendor_dep')
+        gb.add_multilib(PT_VENDOR, 'libllvm_vendor',
+                        dt_needed=['libc.so', 'libllvm_vendor_dep.so'])
+
+        # SP-HAL VNDK-stable
+        gb.add_multilib(PT_SYSTEM, 'libhidlbase')
+        gb.add_multilib(PT_SYSTEM, 'libhidlmemory',
+                        dt_needed=['libhidlbase.so', 'libsp_both_vs.so'])
+
+        # SP-HAL
+        gb.add_multilib(PT_VENDOR, 'libEGL_chipset', extra_dir='egl',
+                        dt_needed=['libc.so', 'libllvm_vendor.so',
+                                   'libhidlmemory.so'])
 
         gb.resolve()
 
-        vndk_stable = {libhidlbase, libhidltransport}
+        # Create generic reference.
+        class MockGenericRefs(object):
+            def classify_lib(self, lib):
+                if 'libllvm_vendor' in lib.path:
+                    return GenericRefs.NEW_LIB
+                return GenericRefs.EXPORT_EQUAL
 
-        sp_hal = gb.graph.compute_sp_hal(vndk_stable, closure=False)
-        sp_hal_closure = gb.graph.compute_sp_hal(vndk_stable, closure=True)
+        sp_lib = gb.graph.compute_sp_lib(MockGenericRefs())
 
-        self.assertSetEqual({gralloc_mapper}, sp_hal)
+        self.assertEqual(2 * 1, len(sp_lib.sp_hal))
+        self.assertEqual(2 * 2, len(sp_lib.sp_hal_dep))
+        self.assertEqual(2 * 2, len(sp_lib.sp_hal_vndk_stable))
+        self.assertEqual(2 * 1, len(sp_lib.sp_ndk))
+        self.assertEqual(2 * 3, len(sp_lib.sp_ndk_vndk_stable))
+        self.assertEqual(2 * 1, len(sp_lib.sp_both_vndk_stable))
 
-        self.assertSetEqual({gralloc_mapper, gralloc_vnd}, sp_hal_closure)
-        self.assertNotIn(libhidlbase, sp_hal_closure)
-        self.assertNotIn(libhidltransport, sp_hal_closure)
-        self.assertNotIn(libc, sp_hal_closure)
+        sp_hal = self._get_paths_from_nodes(sp_lib.sp_hal)
+        sp_hal_dep = self._get_paths_from_nodes(sp_lib.sp_hal_dep)
+        sp_hal_vndk_stable = self._get_paths_from_nodes(
+                sp_lib.sp_hal_vndk_stable)
+
+        sp_ndk = self._get_paths_from_nodes(sp_lib.sp_ndk)
+        sp_ndk_vndk_stable = self._get_paths_from_nodes(
+                sp_lib.sp_ndk_vndk_stable)
+
+        sp_both_vndk_stable = self._get_paths_from_nodes(
+                sp_lib.sp_both_vndk_stable)
+
+        for lib_dir in ('lib', 'lib64'):
+            # SP-Both
+            self.assertIn('/system/{}/libsp_both_vs.so'.format(lib_dir),
+                          sp_both_vndk_stable)
+
+            # SP-NDK dependencies
+            self.assertIn('/system/{}/libcutils.so'.format(lib_dir),
+                          sp_ndk_vndk_stable)
+            self.assertIn('/system/{}/libcutils_dep.so'.format(lib_dir),
+                          sp_ndk_vndk_stable)
+            self.assertIn('/system/{}/libutils.so'.format(lib_dir),
+                          sp_ndk_vndk_stable)
+
+            # SP-NDK
+            self.assertIn('/system/{}/libEGL.so'.format(lib_dir), sp_ndk)
+
+            # SP-HAL dependencies
+            self.assertIn('/vendor/{}/libllvm_vendor.so'.format(lib_dir),
+                          sp_hal_dep)
+            self.assertIn('/vendor/{}/libllvm_vendor_dep.so'.format(lib_dir),
+                          sp_hal_dep)
+
+            # SP-HAL VNDK-stable
+            self.assertIn('/system/{}/libhidlbase.so'.format(lib_dir),
+                          sp_hal_vndk_stable)
+            self.assertIn('/system/{}/libhidlmemory.so'.format(lib_dir),
+                          sp_hal_vndk_stable)
+
+            # SP-HAL
+            self.assertIn('/vendor/{}/egl/libEGL_chipset.so'.format(lib_dir),
+                          sp_hal)
+
+            # LL-NDK must be excluded.
+            libc_path = '/system/{}/libc.so'.format(lib_dir)
+            self.assertNotIn(libc_path, sp_hal)
+            self.assertNotIn(libc_path, sp_hal_dep)
+            self.assertNotIn(libc_path, sp_hal_vndk_stable)
+            self.assertNotIn(libc_path, sp_ndk)
+            self.assertNotIn(libc_path, sp_ndk_vndk_stable)
+
 
     def test_find_existing_vndk(self):
         gb = GraphBuilder()
